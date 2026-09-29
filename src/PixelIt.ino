@@ -69,6 +69,9 @@
 #define SEND_MATRIXINFO_INTERVAL 1000 * 10          // 10 Seconds
 #define SEND_SENSOR_INTERVAL 1000 * 3               // 10 Seconds
 #define UPDATE_BATTERY_LEVEL_INTERVAL 1000 * 30     // 30 Seconds
+#define WIFI_WATCHDOG_CHECK_INTERVAL 1000 * 30       // 30 Seconds
+#define WIFI_WATCHDOG_RECONNECT_TIMEOUT 1000 * 60 * 5  // 5 Minutes stuck -> force WiFi reconnect
+#define WIFI_WATCHDOG_RESTART_TIMEOUT 1000 * 60 * 15   // 15 Minutes stuck -> restart ESP
 
 // Version config - will be replaced by build piple with Git-Tag!
 #define VERSION "0.0.0-beta" // will be replaced by build piple with Git-Tag!
@@ -102,6 +105,14 @@ int mqttPort = 1883;
 unsigned long mqttLastReconnectAttempt = 0; // will store last time reconnect to mqtt broker
 const int MQTT_RECONNECT_INTERVAL = 15000;
 // #define MQTT_MAX_PACKET_SIZE 8000
+
+//// WiFi Watchdog
+// Detects a "zombie" WiFi link: WiFi.status() still reports WL_CONNECTED,
+// but the connection is dead upstream (AP dropped the station without the
+// ESP noticing) so MQTT/DNS keep failing. Without this, the device can be
+// stuck like that indefinitely until manually power-cycled.
+unsigned long wifiWatchdogPrevMillis = 0;
+unsigned long wifiWatchdogDownSinceMillis = 0;
 
 String dfpRXPin = STR(DEFAULT_PIN_DFPRX);
 String dfpTXPin = STR(DEFAULT_PIN_DFPTX);
@@ -4053,6 +4064,44 @@ void loop()
     {
         sendTelemetryPrevMillis = millis();
         SendTelemetry();
+    }
+
+    // WiFi Watchdog
+    if (millis() - wifiWatchdogPrevMillis >= WIFI_WATCHDOG_CHECK_INTERVAL)
+    {
+        wifiWatchdogPrevMillis = millis();
+
+        // Consider the link down if the driver itself lost the connection,
+        // or (when MQTT is used) if MQTT has been unable to connect despite
+        // WiFi.status() claiming WL_CONNECTED - a sign of a zombie link.
+        bool linkLooksDown = (WiFi.status() != WL_CONNECTED) ||
+                              (mqttAktiv && !client.connected() && mqttLastReconnectAttempt != 0);
+
+        if (linkLooksDown)
+        {
+            if (wifiWatchdogDownSinceMillis == 0)
+            {
+                wifiWatchdogDownSinceMillis = millis();
+            }
+
+            unsigned long downFor = millis() - wifiWatchdogDownSinceMillis;
+
+            if (downFor >= WIFI_WATCHDOG_RESTART_TIMEOUT)
+            {
+                Log(F("WifiWatchdog"), F("Connection still down after forced reconnect, restarting..."));
+                ESP.restart();
+            }
+            else if (downFor >= WIFI_WATCHDOG_RECONNECT_TIMEOUT)
+            {
+                Log(F("WifiWatchdog"), F("Connection looks stuck, forcing WiFi reconnect..."));
+                WiFi.disconnect();
+                WiFi.reconnect();
+            }
+        }
+        else
+        {
+            wifiWatchdogDownSinceMillis = 0;
+        }
     }
 
     if (mqttAktiv == true)
