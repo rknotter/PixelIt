@@ -74,7 +74,9 @@
 #define WIFI_WATCHDOG_RESTART_TIMEOUT 1000 * 60 * 5 // 5 Minutes stuck -> restart ESP
 
 // Version config - will be replaced by build piple with Git-Tag!
-#define VERSION "0.0.0-beta" // will be replaced by build piple with Git-Tag!
+// Custom build identifier so this fork/branch is recognizable in the WebUI/API
+// (Version.h reserves only 16 bytes for the prerelease part - keep this suffix short)
+#define VERSION "2.5.6-wokkels-wd" // will be replaced by build piple with Git-Tag!
 
 // Workaround for String in defines
 #define XSTR(x) #x
