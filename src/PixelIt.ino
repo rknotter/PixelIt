@@ -69,9 +69,9 @@
 #define SEND_MATRIXINFO_INTERVAL 1000 * 10          // 10 Seconds
 #define SEND_SENSOR_INTERVAL 1000 * 3               // 10 Seconds
 #define UPDATE_BATTERY_LEVEL_INTERVAL 1000 * 30     // 30 Seconds
-#define WIFI_WATCHDOG_CHECK_INTERVAL 1000 * 30       // 30 Seconds
-#define WIFI_WATCHDOG_RECONNECT_TIMEOUT 1000 * 60 * 5  // 5 Minutes stuck -> force WiFi reconnect
-#define WIFI_WATCHDOG_RESTART_TIMEOUT 1000 * 60 * 15   // 15 Minutes stuck -> restart ESP
+#define WIFI_WATCHDOG_CHECK_INTERVAL 1000 * 30      // 30 Seconds
+#define WIFI_WATCHDOG_RECONNECT_TIMEOUT 1000 * 60   // 1 Minute stuck -> force WiFi reconnect
+#define WIFI_WATCHDOG_RESTART_TIMEOUT 1000 * 60 * 5 // 5 Minutes stuck -> restart ESP
 
 // Version config - will be replaced by build piple with Git-Tag!
 #define VERSION "0.0.0-beta" // will be replaced by build piple with Git-Tag!
