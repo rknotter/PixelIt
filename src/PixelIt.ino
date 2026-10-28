@@ -69,9 +69,14 @@
 #define SEND_MATRIXINFO_INTERVAL 1000 * 10          // 10 Seconds
 #define SEND_SENSOR_INTERVAL 1000 * 3               // 10 Seconds
 #define UPDATE_BATTERY_LEVEL_INTERVAL 1000 * 30     // 30 Seconds
+#define WIFI_WATCHDOG_CHECK_INTERVAL 1000 * 30      // 30 Seconds
+#define WIFI_WATCHDOG_RECONNECT_TIMEOUT 1000 * 60   // 1 Minute stuck -> force WiFi reconnect
+#define WIFI_WATCHDOG_RESTART_TIMEOUT 1000 * 60 * 5 // 5 Minutes stuck -> restart ESP
 
 // Version config - will be replaced by build piple with Git-Tag!
-#define VERSION "0.0.0-beta" // will be replaced by build piple with Git-Tag!
+// Custom build identifier so this fork/branch is recognizable in the WebUI/API
+// (Version.h reserves only 16 bytes for the prerelease part - keep this suffix short)
+#define VERSION "2.5.6-wokkels-wd" // will be replaced by build piple with Git-Tag!
 
 // Workaround for String in defines
 #define XSTR(x) #x
@@ -102,6 +107,14 @@ int mqttPort = 1883;
 unsigned long mqttLastReconnectAttempt = 0; // will store last time reconnect to mqtt broker
 const int MQTT_RECONNECT_INTERVAL = 15000;
 // #define MQTT_MAX_PACKET_SIZE 8000
+
+//// WiFi Watchdog
+// Detects a "zombie" WiFi link: WiFi.status() still reports WL_CONNECTED,
+// but the connection is dead upstream (AP dropped the station without the
+// ESP noticing) so MQTT/DNS keep failing. Without this, the device can be
+// stuck like that indefinitely until manually power-cycled.
+unsigned long wifiWatchdogPrevMillis = 0;
+unsigned long wifiWatchdogDownSinceMillis = 0;
 
 String dfpRXPin = STR(DEFAULT_PIN_DFPRX);
 String dfpTXPin = STR(DEFAULT_PIN_DFPTX);
@@ -287,7 +300,9 @@ int scrollxAvailableTextSpace;
 String scrollTextString;
 
 // Animate BMP Vars
-uint16_t animationBmpList[10][64];
+#define ANIMATION_MAX_FRAMES 20
+uint16_t animationBmpList[ANIMATION_MAX_FRAMES][64];
+int animateBMPFrameCount = 0;
 bool animateBMPAktivLoop = false;
 unsigned long animateBMPPrevMillis = 0;
 int animateBMPCounter = 0;
@@ -1784,23 +1799,22 @@ void CreateFrames(JsonObject &json, int forceDuration)
 
             logMessage += F("BitmapAnimation, ");
             // animationBmpList zurücksetzten um das ende nacher zu finden -1 (habe aktuell keine bessere Lösung)
-            for (int i = 0; i < 10; i++)
-            {
-                animationBmpList[i][0] = 2;
-            }
-
             int counter = 0;
             for (JsonVariant x : json["bitmapAnimation"]["data"].as<JsonArray>())
             {
-                // JsonArray in IntArray konvertieren
+                // extra beelden negeren in plaats van geheugen te overschrijven
+                if (counter >= ANIMATION_MAX_FRAMES)
+                {
+                    break;
+                }
                 x.as<JsonArray>().copyTo(bmpArray);
-                // Speichern für die Ausgabe
                 for (int i = 0; i < 64; i++)
                 {
                     animationBmpList[counter][i] = bmpArray[i];
                 }
                 counter++;
             }
+            animateBMPFrameCount = counter;
 
             // Serial.printf("Counter: %d\n", counter);
 
@@ -2345,7 +2359,7 @@ void DrawTextHelper(String text, int bigFont, bool centerText, bool scrollText, 
         // then the brightness is too low (0),
         // but only if animateBMPAktivLoop is not active,
         // because otherwise it's already done.
-        if (fadeInRequired && !animateBMPAktivLoop)
+        if (fadeInRequired)
         {
             FadeIn();
         }
@@ -2399,7 +2413,14 @@ void ScrollText(bool isFadeInRequired)
 void AnimateBMP(bool isShowRequired)
 {
     // Prüfen auf 2, 2 ist mein Platzhalter für leeres obj!
-    if (animationBmpList[animateBMPCounter][0] == 2)
+    if (animateBMPFrameCount == 0)
+    {
+        animateBMPAktivLoop = false;
+        return;
+    }
+
+    // einde van de animatie bereikt
+    if (animateBMPCounter >= animateBMPFrameCount)
     {
         // Ist ein Repeat Limit übergeben worden.
         if (animateBMPLimitLoops > 0 && !animateBMPRubberbandingAktiv)
@@ -3922,7 +3943,7 @@ void setup()
     {
         client.setServer(mqttServer.c_str(), mqttPort);
         client.setCallback(callback);
-        client.setBufferSize(8000);
+        client.setBufferSize(16000);
         Log(F("Setup"), F("MQTT started"));
     }
 
@@ -4053,6 +4074,44 @@ void loop()
     {
         sendTelemetryPrevMillis = millis();
         SendTelemetry();
+    }
+
+    // WiFi Watchdog
+    if (millis() - wifiWatchdogPrevMillis >= WIFI_WATCHDOG_CHECK_INTERVAL)
+    {
+        wifiWatchdogPrevMillis = millis();
+
+        // Consider the link down if the driver itself lost the connection,
+        // or (when MQTT is used) if MQTT has been unable to connect despite
+        // WiFi.status() claiming WL_CONNECTED - a sign of a zombie link.
+        bool linkLooksDown = (WiFi.status() != WL_CONNECTED) ||
+                              (mqttAktiv && !client.connected() && mqttLastReconnectAttempt != 0);
+
+        if (linkLooksDown)
+        {
+            if (wifiWatchdogDownSinceMillis == 0)
+            {
+                wifiWatchdogDownSinceMillis = millis();
+            }
+
+            unsigned long downFor = millis() - wifiWatchdogDownSinceMillis;
+
+            if (downFor >= WIFI_WATCHDOG_RESTART_TIMEOUT)
+            {
+                Log(F("WifiWatchdog"), F("Connection still down after forced reconnect, restarting..."));
+                ESP.restart();
+            }
+            else if (downFor >= WIFI_WATCHDOG_RECONNECT_TIMEOUT)
+            {
+                Log(F("WifiWatchdog"), F("Connection looks stuck, forcing WiFi reconnect..."));
+                WiFi.disconnect();
+                WiFi.reconnect();
+            }
+        }
+        else
+        {
+            wifiWatchdogDownSinceMillis = 0;
+        }
     }
 
     if (mqttAktiv == true)
