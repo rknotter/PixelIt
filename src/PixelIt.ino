@@ -312,7 +312,6 @@ uint animateBMPDelay;
 int animateBMPLimitLoops = -1;
 int animateBMPLoopCount = 0;
 int animateBMPLimitFrames = -1;
-int animateBMPFrameCount = 0;
 
 // Sensors Vars
 unsigned long sendLuxPrevMillis = 0;
